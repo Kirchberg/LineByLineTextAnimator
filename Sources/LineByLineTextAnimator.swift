@@ -9,26 +9,30 @@ enum LineByLineTextAnimator {
     static func animateIn(
         label: UILabel,
         totalDuration: TimeInterval = 0.56,
-        cascadeFraction: Double = 0.45
+        cascadeFraction: Double = 0.45,
+        completion: (() -> Void)? = nil
     ) {
         runAnimation(
             label: label,
             totalDuration: totalDuration,
             cascadeFraction: cascadeFraction,
-            direction: .in
+            direction: .in,
+            completion: completion
         )
     }
 
     static func animateOut(
         label: UILabel,
         totalDuration: TimeInterval = 0.56,
-        cascadeFraction: Double = 0.45
+        cascadeFraction: Double = 0.45,
+        completion: (() -> Void)? = nil
     ) {
         runAnimation(
             label: label,
             totalDuration: totalDuration,
             cascadeFraction: cascadeFraction,
-            direction: .out
+            direction: .out,
+            completion: completion
         )
     }
 
@@ -41,13 +45,16 @@ enum LineByLineTextAnimator {
         label: UILabel,
         totalDuration: TimeInterval,
         cascadeFraction: Double,
-        direction: Direction
+        direction: Direction,
+        completion: (() -> Void)? = nil
     ) {
         guard let host = label.superview else {
+            completion?()
             return
         }
         let lines = label.visualLinesCached()
         guard !lines.isEmpty else {
+            completion?()
             return
         }
 
@@ -91,20 +98,32 @@ enum LineByLineTextAnimator {
             textLayer.frame = wrapper.bounds
             textLayer.string = attr
             textLayer.contentsScale = UIScreen.main.scale
+            if let paragraphStyle = attr.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
+                switch paragraphStyle.alignment {
+                case .left: textLayer.alignmentMode = .left
+                case .right: textLayer.alignmentMode = .right
+                case .center: textLayer.alignmentMode = .center
+                case .justified: textLayer.alignmentMode = .justified
+                case .natural: textLayer.alignmentMode = .natural
+                @unknown default: textLayer.alignmentMode = .natural
+                }
+            }
             wrapper.layer.addSublayer(textLayer)
 
             if #available(iOS 17.0, *) {
                 let startRadius: CGFloat = direction == .in ? 8 : 0
                 let endRadius: CGFloat = direction == .in ? 0 : 8
-                let blur = CIFilter(
-                    name: "CIGaussianBlur",
-                    parameters: [kCIInputRadiusKey: startRadius]
-                )!
+
+                guard let blur = CIFilter(name: "CIGaussianBlur") else {
+                    addFallbackBlur(to: wrapper, direction: direction, lineDuration: lineDuration, delay: perLineDelay * Double(idx))
+                    container.addSubview(wrapper)
+                    wrappers.append(wrapper)
+                    continue
+                }
+                blur.setValue(startRadius, forKey: kCIInputRadiusKey)
                 textLayer.filters = [blur]
 
-                let blurAnim = CABasicAnimation(
-                    keyPath: "filters.gaussianBlur.inputRadius"
-                )
+                let blurAnim = CABasicAnimation(keyPath: "filters.gaussianBlur.inputRadius")
                 blurAnim.fromValue = startRadius
                 blurAnim.toValue = endRadius
                 blurAnim.duration = lineDuration
@@ -112,43 +131,40 @@ enum LineByLineTextAnimator {
                 blurAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
                 textLayer.add(blurAnim, forKey: "blur")
             } else {
-                let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
-                blurView.frame = wrapper.bounds
-                blurView.alpha = direction == .in ? 1 : 0
-                wrapper.addSubview(blurView)
-
-                UIView.animate(
-                    withDuration: lineDuration,
-                    delay: perLineDelay * Double(idx),
-                    options: [.curveEaseOut]
-                ) {
-                    blurView.alpha = direction == .in ? 0 : 1
-                }
+                addFallbackBlur(to: wrapper, direction: direction, lineDuration: lineDuration, delay: perLineDelay * Double(idx))
             }
 
             container.addSubview(wrapper)
             wrappers.append(wrapper)
         }
 
-        let animator = UIViewPropertyAnimator(
-            duration: lineDuration,
-            timingParameters: timing
-        )
+        func addFallbackBlur(to wrapper: UIView, direction: Direction, lineDuration: TimeInterval, delay: TimeInterval) {
+            let blurView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
+            blurView.frame = wrapper.bounds
+            blurView.alpha = direction == .in ? 1 : 0
+            wrapper.addSubview(blurView)
+
+            UIView.animate(
+                withDuration: lineDuration,
+                delay: delay,
+                options: [.curveEaseOut]
+            ) {
+                blurView.alpha = direction == .in ? 0 : 1
+            }
+        }
+
+        let animator = UIViewPropertyAnimator(duration: lineDuration, timingParameters: timing)
         for (idx, wrapper) in wrappers.enumerated() {
             let delayFactor = (perLineDelay * Double(idx)) / totalDuration
-            animator.addAnimations(
-                {
-                    if direction == .in {
-                        wrapper.alpha = 1
-                        wrapper.transform = .identity
-                    } else {
-                        wrapper.alpha = 0
-                        wrapper.transform = CGAffineTransform(translationX: 0, y: 8)
-                            .scaledBy(x: 0.96, y: 0.96)
-                    }
-                },
-                delayFactor: CGFloat(delayFactor)
-            )
+            animator.addAnimations({
+                if direction == .in {
+                    wrapper.alpha = 1
+                    wrapper.transform = .identity
+                } else {
+                    wrapper.alpha = 0
+                    wrapper.transform = CGAffineTransform(translationX: 0, y: 8).scaledBy(x: 0.96, y: 0.96)
+                }
+            }, delayFactor: CGFloat(delayFactor))
         }
 
         animator.addCompletion { _ in
@@ -156,6 +172,7 @@ enum LineByLineTextAnimator {
             if direction == .in {
                 label.isHidden = false
             }
+            completion?()
         }
         animator.startAnimation()
     }
@@ -165,47 +182,78 @@ enum LineByLineTextAnimator {
 
 private struct LineCacheKey: Hashable {
     let text: String
-    let font: UIFont
+    let fontName: String
+    let fontSize: CGFloat
     let width: CGFloat
+    let alignment: NSTextAlignment
+    let lineHeight: CGFloat?
+    let textColor: UIColor?
 }
 
 private extension UILabel {
 
     func visualLinesCached() -> [(NSAttributedString, CGRect)] {
+        var effectiveLineHeight: CGFloat?
+        if let attributedText = self.attributedText, attributedText.length > 0,
+           let paragraphStyle = attributedText.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
+            if paragraphStyle.minimumLineHeight > 0 && paragraphStyle.minimumLineHeight == paragraphStyle.maximumLineHeight {
+                effectiveLineHeight = paragraphStyle.minimumLineHeight
+            }
+        }
+
         let key = LineCacheKey(
-            text: text ?? attributedText?.string ?? "",
-            font: font ?? .systemFont(ofSize: 17),
-            width: bounds.width.rounded()
+            text: self.attributedText?.string ?? self.text ?? "",
+            fontName: self.font?.fontName ?? UIFont.systemFont(ofSize: 17).fontName,
+            fontSize: self.font?.pointSize ?? 17,
+            width: self.bounds.width.rounded(),
+            alignment: self.textAlignment,
+            lineHeight: effectiveLineHeight,
+            textColor: self.textColor
         )
+
         if let cached = Self._cache[key] {
             return cached
         }
-        let res = makeVisualLineInfo(using: createAttributedString())
+
+        let attributedStringToUse = self.createAttributedString()
+        let res = self.makeVisualLineInfo(using: attributedStringToUse)
         Self._cache[key] = res
         return res
     }
 
-    private static var _cache: [LineCacheKey: [(NSAttributedString, CGRect)]] = [:]
-
-}
-
-private extension UILabel {
-
     func createAttributedString() -> NSAttributedString {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = textAlignment
-        paragraph.lineBreakMode = lineBreakMode
-        let baseAttrs: [NSAttributedString.Key: Any] = [
-            .font: font as Any,
-            .paragraphStyle: paragraph,
-            .foregroundColor: textColor as Any
-        ]
-        if let attr = attributedText, attr.length > 0 {
-            let m = NSMutableAttributedString(attributedString: attr)
-            m.addAttributes(baseAttrs, range: NSRange(location: 0, length: m.length))
-            return m
+        let sourceText = self.attributedText?.string ?? self.text ?? ""
+        guard !sourceText.isEmpty else {
+            return NSAttributedString()
         }
-        return NSAttributedString(string: text ?? "", attributes: baseAttrs)
+
+        var attributes: [NSAttributedString.Key: Any] = [:]
+        attributes[.font] = self.font ?? UIFont.systemFont(ofSize: UIFont.systemFontSize)
+        attributes[.foregroundColor] = self.textColor ?? UIColor.black
+
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.alignment = self.textAlignment
+        paragraphStyle.lineBreakMode = self.lineBreakMode
+
+        if let existingAttributedText = self.attributedText, existingAttributedText.length > 0,
+           let existingParagraphStyle = existingAttributedText.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
+            if existingParagraphStyle.minimumLineHeight > 0 && existingParagraphStyle.minimumLineHeight == existingParagraphStyle.maximumLineHeight {
+                paragraphStyle.minimumLineHeight = existingParagraphStyle.minimumLineHeight
+                paragraphStyle.maximumLineHeight = existingParagraphStyle.maximumLineHeight
+            }
+        }
+        attributes[.paragraphStyle] = paragraphStyle
+
+        if let existingAttributedText = self.attributedText, existingAttributedText.length > 0 {
+            let mutableAttributedString = NSMutableAttributedString(string: sourceText)
+            existingAttributedText.enumerateAttributes(in: NSRange(location: 0, length: existingAttributedText.length)) { (attrs, range, _) in
+                mutableAttributedString.addAttributes(attrs, range: range)
+            }
+            mutableAttributedString.addAttributes(attributes, range: NSRange(location: 0, length: mutableAttributedString.length))
+            return mutableAttributedString
+        } else {
+            return NSAttributedString(string: sourceText, attributes: attributes)
+        }
     }
 
     func makeVisualLineInfo(using attr: NSAttributedString) -> [(NSAttributedString, CGRect)] {
@@ -225,24 +273,26 @@ private extension UILabel {
         layout.ensureLayout(for: container)
 
         var result: [(NSAttributedString, CGRect)] = []
-        var glyph = 0
-        while glyph < layout.numberOfGlyphs {
-            var range = NSRange()
-            let rect = layout.lineFragmentUsedRect(
-                forGlyphAt: glyph,
-                effectiveRange: &range
+        var glyphIndex = 0
+        while glyphIndex < layout.numberOfGlyphs {
+            var lineRange = NSRange()
+            let lineRect = layout.lineFragmentUsedRect(
+                forGlyphAt: glyphIndex,
+                effectiveRange: &lineRange
             )
-            if range.length == 0 {
+            if lineRange.length == 0 {
                 break
             }
             let charRange = layout.characterRange(
-                forGlyphRange: range,
+                forGlyphRange: lineRange,
                 actualGlyphRange: nil
             )
-            result.append((attr.attributedSubstring(from: charRange), rect))
-            glyph = NSMaxRange(range)
+            result.append((attr.attributedSubstring(from: charRange), lineRect))
+            glyphIndex = NSMaxRange(lineRange)
         }
         return result
     }
+
+    private static var _cache: [LineCacheKey: [(NSAttributedString, CGRect)]] = [:]
 
 }
