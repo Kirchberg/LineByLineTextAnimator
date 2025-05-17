@@ -2,6 +2,10 @@
 
 WWDC‑style per‑line text reveal & hide animation for `UILabel` 🚀
 
+## 📹 Preview
+
+https://github.com/user-attachments/assets/7231510f-a29e-40cf-b41e-742d4836cbd1
+
 ## 🎯 Features
 
 * 🔠 **Line‑by‑line** staggered animation (cascade)
