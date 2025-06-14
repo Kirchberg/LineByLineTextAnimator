@@ -1,6 +1,6 @@
-import UIKit
-import CoreText
 import CoreImage
+import CoreText
+import UIKit
 
 // MARK: - LineByLineTextAnimator
 
@@ -94,21 +94,13 @@ enum LineByLineTextAnimator {
                 wrapper.transform = CGAffineTransform(translationX: 0, y: 8).scaledBy(x: 0.96, y: 0.96)
             }
 
-            let textLayer = CATextLayer()
-            textLayer.frame = wrapper.bounds
-            textLayer.string = attr
-            textLayer.contentsScale = UIScreen.main.scale
-            if let paragraphStyle = attr.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
-                switch paragraphStyle.alignment {
-                case .left: textLayer.alignmentMode = .left
-                case .right: textLayer.alignmentMode = .right
-                case .center: textLayer.alignmentMode = .center
-                case .justified: textLayer.alignmentMode = .justified
-                case .natural: textLayer.alignmentMode = .natural
-                @unknown default: textLayer.alignmentMode = .natural
-                }
-            }
-            wrapper.layer.addSublayer(textLayer)
+            let lineLabel = UILabel(frame: wrapper.bounds)
+            lineLabel.attributedText = attr
+            lineLabel.numberOfLines = 1
+            lineLabel.lineBreakMode = .byWordWrapping
+            lineLabel.textAlignment = label.textAlignment
+            lineLabel.backgroundColor = .clear
+            wrapper.addSubview(lineLabel)
 
             if #available(iOS 17.0, *) {
                 let startRadius: CGFloat = direction == .in ? 8 : 0
@@ -121,7 +113,7 @@ enum LineByLineTextAnimator {
                     continue
                 }
                 blur.setValue(startRadius, forKey: kCIInputRadiusKey)
-                textLayer.filters = [blur]
+                lineLabel.layer.filters = [blur]
 
                 let blurAnim = CABasicAnimation(keyPath: "filters.gaussianBlur.inputRadius")
                 blurAnim.fromValue = startRadius
@@ -129,7 +121,7 @@ enum LineByLineTextAnimator {
                 blurAnim.duration = lineDuration
                 blurAnim.beginTime = CACurrentMediaTime() + perLineDelay * Double(idx)
                 blurAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                textLayer.add(blurAnim, forKey: "blur")
+                lineLabel.layer.add(blurAnim, forKey: "blur")
             } else {
                 addFallbackBlur(to: wrapper, direction: direction, lineDuration: lineDuration, delay: perLineDelay * Double(idx))
             }
@@ -156,15 +148,16 @@ enum LineByLineTextAnimator {
         let animator = UIViewPropertyAnimator(duration: lineDuration, timingParameters: timing)
         for (idx, wrapper) in wrappers.enumerated() {
             let delayFactor = (perLineDelay * Double(idx)) / totalDuration
-            animator.addAnimations({
-                if direction == .in {
-                    wrapper.alpha = 1
-                    wrapper.transform = .identity
-                } else {
-                    wrapper.alpha = 0
-                    wrapper.transform = CGAffineTransform(translationX: 0, y: 8).scaledBy(x: 0.96, y: 0.96)
-                }
-            }, delayFactor: CGFloat(delayFactor))
+            animator.addAnimations(
+                {
+                    if direction == .in {
+                        wrapper.alpha = 1
+                        wrapper.transform = .identity
+                    } else {
+                        wrapper.alpha = 0
+                        wrapper.transform = CGAffineTransform(translationX: 0, y: 8).scaledBy(x: 0.96, y: 0.96)
+                    }
+                }, delayFactor: CGFloat(delayFactor))
         }
 
         animator.addCompletion { _ in
@@ -176,6 +169,7 @@ enum LineByLineTextAnimator {
         }
         animator.startAnimation()
     }
+
 }
 
 // MARK: – Caching & TextKit helpers ----------------------------------------
@@ -190,13 +184,17 @@ private struct LineCacheKey: Hashable {
     let textColor: UIColor?
 }
 
-private extension UILabel {
+extension UILabel {
 
-    func visualLinesCached() -> [(NSAttributedString, CGRect)] {
+    fileprivate func visualLinesCached() -> [(NSAttributedString, CGRect)] {
         var effectiveLineHeight: CGFloat?
         if let attributedText = self.attributedText, attributedText.length > 0,
-           let paragraphStyle = attributedText.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
-            if paragraphStyle.minimumLineHeight > 0 && paragraphStyle.minimumLineHeight == paragraphStyle.maximumLineHeight {
+           let paragraphStyle = attributedText.attribute(.paragraphStyle, at: 0, effectiveRange: nil)
+            as? NSParagraphStyle
+        {
+            if paragraphStyle.minimumLineHeight > 0
+                && paragraphStyle.minimumLineHeight == paragraphStyle.maximumLineHeight
+            {
                 effectiveLineHeight = paragraphStyle.minimumLineHeight
             }
         }
@@ -221,7 +219,7 @@ private extension UILabel {
         return res
     }
 
-    func createAttributedString() -> NSAttributedString {
+    fileprivate func createAttributedString() -> NSAttributedString {
         let sourceText = self.attributedText?.string ?? self.text ?? ""
         guard !sourceText.isEmpty else {
             return NSAttributedString()
@@ -236,8 +234,12 @@ private extension UILabel {
         paragraphStyle.lineBreakMode = self.lineBreakMode
 
         if let existingAttributedText = self.attributedText, existingAttributedText.length > 0,
-           let existingParagraphStyle = existingAttributedText.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
-            if existingParagraphStyle.minimumLineHeight > 0 && existingParagraphStyle.minimumLineHeight == existingParagraphStyle.maximumLineHeight {
+           let existingParagraphStyle = existingAttributedText.attribute(
+            .paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        {
+            if existingParagraphStyle.minimumLineHeight > 0
+                && existingParagraphStyle.minimumLineHeight == existingParagraphStyle.maximumLineHeight
+            {
                 paragraphStyle.minimumLineHeight = existingParagraphStyle.minimumLineHeight
                 paragraphStyle.maximumLineHeight = existingParagraphStyle.maximumLineHeight
             }
@@ -246,17 +248,20 @@ private extension UILabel {
 
         if let existingAttributedText = self.attributedText, existingAttributedText.length > 0 {
             let mutableAttributedString = NSMutableAttributedString(string: sourceText)
-            existingAttributedText.enumerateAttributes(in: NSRange(location: 0, length: existingAttributedText.length)) { (attrs, range, _) in
+            existingAttributedText.enumerateAttributes(
+                in: NSRange(location: 0, length: existingAttributedText.length)
+            ) { (attrs, range, _) in
                 mutableAttributedString.addAttributes(attrs, range: range)
             }
-            mutableAttributedString.addAttributes(attributes, range: NSRange(location: 0, length: mutableAttributedString.length))
+            mutableAttributedString.addAttributes(
+                attributes, range: NSRange(location: 0, length: mutableAttributedString.length))
             return mutableAttributedString
         } else {
             return NSAttributedString(string: sourceText, attributes: attributes)
         }
     }
 
-    func makeVisualLineInfo(using attr: NSAttributedString) -> [(NSAttributedString, CGRect)] {
+    fileprivate func makeVisualLineInfo(using attr: NSAttributedString) -> [(NSAttributedString, CGRect)] {
         guard attr.length > 0 else {
             return []
         }
