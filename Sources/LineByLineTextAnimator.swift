@@ -13,12 +13,17 @@ enum LineByLineTextAnimator {
     cascadeFraction: Double = 0.45,
     completion: (() -> Void)? = nil
   ) {
-    if let ctx = context(for: label) {
+    if let ctx = context(for: label), ctx.container.superview != nil {
       ctx.animator.pauseAnimation()
       ctx.animator.isReversed = false
       ctx.direction = .in
       ctx.animator.continueAnimation(withTimingParameters: nil, durationFactor: 1)
     } else {
+      if let ctx = context(for: label) {
+        ctx.animator.stopAnimation(true)
+        ctx.container.removeFromSuperview()
+        setContext(nil, for: label)
+      }
       runAnimation(
         label: label,
         totalDuration: totalDuration,
@@ -35,12 +40,18 @@ enum LineByLineTextAnimator {
     cascadeFraction: Double = 0.45,
     completion: (() -> Void)? = nil
   ) {
-    if let ctx = context(for: label) {
+    if let ctx = context(for: label), ctx.container.superview != nil {
       ctx.animator.pauseAnimation()
+      label.isHidden = true
       ctx.animator.isReversed = true
       ctx.direction = .out
       ctx.animator.continueAnimation(withTimingParameters: nil, durationFactor: 1)
     } else {
+      if let ctx = context(for: label) {
+        ctx.animator.stopAnimation(true)
+        ctx.container.removeFromSuperview()
+        setContext(nil, for: label)
+      }
       runAnimation(
         label: label,
         totalDuration: totalDuration,
@@ -210,15 +221,15 @@ enum LineByLineTextAnimator {
         }, delayFactor: CGFloat(delayFactor))
     }
 
+    let ctx = AnimationContext(container: container, animator: animator, direction: direction)
     animator.addCompletion { _ in
       container.removeFromSuperview()
-      if direction == .in {
+      if ctx.direction == .in {
         label.isHidden = false
       }
       setContext(nil, for: label)
       completion?()
     }
-    let ctx = AnimationContext(container: container, animator: animator, direction: direction)
     setContext(ctx, for: label)
     animator.startAnimation()
   }
